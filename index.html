@@ -45,6 +45,7 @@ button{font:inherit;cursor:pointer}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:14px;z-index:10;font-weight:600;max-width:90%;text-align:center}
 .hide{display:none}
 .foot{text-align:center;color:var(--mut);font-size:11px;margin-top:14px}
+.foot b{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -75,29 +76,22 @@ button{font:inherit;cursor:pointer}
   <div class="sub">Reglas: caña, rebujito y vino = 1 pt · chupito = 1 · copazo = 2 · agua = 0 pero te da el título de “El sensato” 💧. Tope de cordura: 14 pts. Quien conduce, no compite.</div>
 </div>
 
-<div class="foot" id="foot"></div>
+<div class="foot" id="foot">Cargando…</div>
 
 <script>
-/* ============================================================
-   CONFIGURACIÓN
-   ------------------------------------------------------------
-   Para ranking compartido entre móviles, pon enabled:true y
-   rellena los datos de tu proyecto Firebase (Firestore).
-   Si lo dejas en false, funciona en modo local (un dispositivo).
-   ============================================================ */
-const FIREBASE = {
-  enabled: false,
-  config: {
-    apiKey: "TU_API_KEY",
-    authDomain: "TU_PROYECTO.firebaseapp.com",
-    projectId: "TU_PROYECTO",
-    storageBucket: "TU_PROYECTO.appspot.com",
-    messagingSenderId: "TU_SENDER_ID",
-    appId: "TU_APP_ID"
-  },
-  collectionName: "players"
+/* ================================================================
+   CONFIGURACIÓN — rellena el token fine-grained de GitHub.
+   Si lo dejas como está, la app funciona en modo local (un móvil).
+   ================================================================ */
+const GH = {
+  owner:  'alvaroprieto25',
+  repo:   'cuenta-cubatas',
+  path:   'data.json',
+  branch: 'main',
+  token:  'REEMPLAZA_CON_TU_TOKEN',
+  pollMs: 20000
 };
-/* ============================================================ */
+/* ================================================================ */
 
 const D=[
   {k:'cana',e:'🍺',n:'Caña',p:1},
@@ -109,23 +103,52 @@ const D=[
 ];
 const AVS=['🦁','🐯','🦊','🐺','🐸','🦄','🐙','🦖','🐧','🤠','😎','🥳'];
 const LIMIT=14;
+const LOCAL_KEY='mp_boda_v2';
+
+const REMOTE_OK = GH.token && !GH.token.startsWith('REEMPLAZA') && GH.token.length > 20;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=id=>document.getElementById(id);
 
-let players={}, meId=null, store=null, ready=false;
-let lastLeader=null, lastK=null, feed=[], t0=Date.now();
-let av=AVS[Math.floor(Math.random()*AVS.length)];
+/* ---------- estado ---------- */
+let players = {};
+let meId = null;
+let av = AVS[Math.floor(Math.random()*AVS.length)];
+let lastLeader = null;
+let lastK = null;
+let feed = [];
+let isSaving = false;
+let pending = null;
+let bc = null;
+let lastPollTime = 0;
+let pollingTimer = null;
 
-/* --- identidad persistente --- */
-try{ meId=localStorage.getItem('mp_id'); }catch(e){}
+try{ meId = localStorage.getItem('mp_id'); }catch(e){}
 if(!meId){
-  meId='p'+Math.random().toString(36).slice(2,10);
-  try{ localStorage.setItem('mp_id',meId); }catch(e){}
+  meId = 'p'+Math.random().toString(36).slice(2,10);
+  try{ localStorage.setItem('mp_id', meId); }catch(e){}
 }
 
-const score=c=>D.reduce((s,d)=>s+(c[d.k]||0)*d.p,0);
+const score = c => D.reduce((s,d)=>s+(c[d.k]||0)*d.p,0);
+const streak = p => (p.h||[]).filter(t=>Date.now()-t<20*60000).length;
+const sorted = () => Object.entries(players).map(([id,p])=>({id,...p}))
+  .sort((a,b)=>b.score-a.score || (a.last?.t||0)-(b.last?.t||0));
 
+/* ---------- utils base64 unicode-safe ---------- */
+function b64e(str){
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64d(b64){
+  const bin = atob(b64.replace(/\n/g,''));
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/* ---------- UI helpers ---------- */
 function toast(t){
   const e=document.createElement('div');
   e.className='toast'; e.textContent=t;
@@ -142,56 +165,220 @@ function confetti(set){
     setTimeout(()=>e.remove(),3400);
   }
 }
-
-function sorted(){
-  return Object.entries(players)
-    .map(([id,p])=>({id,...p}))
-    .sort((a,b)=>b.score-a.score || (a.last?.t||0)-(b.last?.t||0));
+function setStatus(txt, ok){
+  $('foot').innerHTML = ok ? '<b>●</b> '+txt : txt;
 }
-function streak(p){ return (p.h||[]).filter(t=>Date.now()-t<20*60000).length; }
 
-/* ---------------- RENDER ---------------- */
-function render(){
-  const list=sorted();
-  if(!list.length) return;
-  const max=Math.max(1,...list.map(p=>p.score));
-  const mine=players[meId];
+/* ================================================================
+   CAPA REMOTA: GitHub Contents API
+   ================================================================ */
+async function readViaRaw(){
+  const url = `https://raw.githubusercontent.com/${GH.owner}/${GH.repo}/${GH.branch}/${GH.path}?t=${Date.now()}`;
+  const r = await fetch(url, { cache:'no-store' });
+  if(r.status === 404) return { players:{} };
+  if(!r.ok) throw new Error('read '+r.status);
+  return await r.json();
+}
 
-  if(mine){
-    $('meAv').textContent=mine.av;
-    $('meNm').textContent=mine.name;
-    $('mePts').textContent=mine.score;
-    const rank=list.findIndex(p=>p.id===meId)+1;
-    $('meSt').textContent='Vas el nº '+rank+' de '+list.length+' · 💧 '+(mine.c.agua||0);
+async function commitChange(mutator){
+  const apiUrl = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}`;
+  const headers = {
+    Authorization: `Bearer ${GH.token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
 
-    document.querySelectorAll('.dk').forEach(b=>{
-      const d=D.find(x=>x.k===b.dataset.k);
-      b.disabled = d.p>0 && mine.score+d.p>LIMIT;
+  for(let attempt=0; attempt<4; attempt++){
+    // 1) Leer estado actual (con auth para tener SHA y contenido frescos)
+    const gR = await fetch(apiUrl + '?ref=' + encodeURIComponent(GH.branch), { headers });
+    let current = { players:{} }, curSha = null;
+    if(gR.ok){
+      const g = await gR.json();
+      curSha = g.sha;
+      try { current = JSON.parse(b64d(g.content)); } catch(e){}
+    } else if(gR.status !== 404){
+      throw new Error('read '+gR.status);
+    }
+    if(!current.players) current.players = {};
+
+    // 2) Aplicar SOLO mi cambio
+    const next = mutator(JSON.parse(JSON.stringify(current)));
+
+    // 3) Escribir
+    const body = {
+      message: `update ${new Date().toISOString().slice(0,19)}Z`,
+      content: b64e(JSON.stringify(next, null, 2)),
+      branch:  GH.branch
+    };
+    if(curSha) body.sha = curSha;
+
+    const pR = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type':'application/json' },
+      body: JSON.stringify(body)
     });
 
-    $('warn').innerHTML = mine.score>=LIMIT-2
-      ? '<div class="warn">🛑 Has llegado al tope de cordura. Eres leyenda: ahora agua, comida y a casa en taxi. 💧</div>'
-      : (streak(mine)>=3 ? '<div class="warn">🔥 Vas en racha. Ojo: toca un vaso de agua para seguir en la lucha.</div>' : '');
+    if(pR.ok) return next;
+    if(pR.status === 409){ // conflicto, alguien escribió antes
+      await new Promise(r=>setTimeout(r, 300 + Math.random()*600));
+      continue;
+    }
+    throw new Error('write '+pR.status+' '+await pR.text());
+  }
+  throw new Error('conflicto tras reintentos');
+}
+
+/* ================================================================
+   MODO LOCAL (fallback si no hay token)
+   ================================================================ */
+function initLocalMode(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(LOCAL_KEY));
+    if(saved && saved.players) players = saved.players;
+  }catch(e){}
+  window.addEventListener('storage', e => { if(e.key===LOCAL_KEY) loadLocal(); });
+  if('BroadcastChannel' in window){
+    bc = new BroadcastChannel('mp_boda');
+    bc.onmessage = () => loadLocal();
+  }
+  setStatus('Modo local (solo este móvil) · configura el token para el ranking compartido', true);
+}
+function loadLocal(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(LOCAL_KEY));
+    players = (saved && saved.players) || {};
+    render();
+  }catch(e){}
+}
+function writeLocal(){
+  try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ players })); }catch(e){}
+  if(bc) bc.postMessage(1);
+}
+
+/* ================================================================
+   GUARDAR (cola para no pisar cambios)
+   ================================================================ */
+async function save(myPlayer){
+  players[meId] = myPlayer;
+  render();
+
+  if(!REMOTE_OK){
+    writeLocal();
+    return;
   }
 
-  const water=[...list].sort((a,b)=>(b.c?.agua||0)-(a.c?.agua||0))[0];
-  const badges=p=>{
-    let b='';
-    if(p.id===list[0].id && p.score>0) b+='<span class="bd">👑 líder</span>';
-    if(water && p.id===water.id && (water.c?.agua||0)>0) b+='<span class="bd">💧 el sensato</span>';
-    if(streak(p)>=3) b+='<span class="bd">🔥 racha</span>';
-    if(list.length>2 && p.id===list[list.length-1].id) b+='<span class="bd">🐢 tortuga</span>';
-    if(p.score>=LIMIT) b+='<span class="bd">🏆 leyenda</span>';
+  if(isSaving){ pending = myPlayer; return; }
+
+  isSaving = true;
+  setStatus('Guardando…', false);
+
+  try{
+    const newState = await commitChange(state => {
+      state.players = state.players || {};
+      state.players[meId] = myPlayer;
+      return state;
+    });
+    players = newState.players || {};
+    render();
+    setStatus('Sincronizado', true);
+  }catch(e){
+    console.error(e);
+    toast('⚠️ No se pudo guardar. Reintentando…');
+    setStatus('Error de red · reintentando', false);
+    try{
+      const d = await readViaRaw();
+      players = d.players || {};
+      render();
+    }catch(_){}
+  }finally{
+    isSaving = false;
+    if(pending){
+      const p = pending; pending = null;
+      save(p);
+    }
+  }
+}
+
+/* ================================================================
+   POLLING: leer cambios de otros cada 20 s
+   ================================================================ */
+async function poll(){
+  if(isSaving) return; // no pisar mi estado optimista
+  try{
+    const data = await readViaRaw();
+    const newPlayers = data.players || {};
+    const isFirst = lastPollTime === 0;
+
+    Object.entries(newPlayers).forEach(([id,p])=>{
+      if(id === meId || !p || !p.last || !p.last.k) return;
+      const q = players[id];
+      const oldT = (q && q.last && q.last.t) || 0;
+      if(!isFirst && p.last.t > oldT){
+        const d = D.find(x=>x.k === p.last.k);
+        if(d){
+          feed.unshift(`${p.av} <b>${esc(p.name)}</b> se ha tomado ${
+            d.k === 'agua' ? 'un agua 💧 (qué sensato)' : 'un '+d.n.toLowerCase()+' '+d.e
+          }`);
+        }
+      }
+    });
+
+    players = newPlayers;
+    render();
+    showFeed();
+    lastPollTime = Date.now();
+    setStatus('Sincronizado', true);
+  }catch(e){
+    console.warn('poll', e);
+    setStatus('Sin conexión · reintentando', false);
+  }
+}
+
+/* ================================================================
+   RENDER
+   ================================================================ */
+function render(){
+  const list = sorted();
+  if(!list.length){ return; }
+  const max = Math.max(1, ...list.map(p=>p.score));
+  const mine = players[meId];
+
+  if(mine){
+    $('meAv').textContent = mine.av;
+    $('meNm').textContent = mine.name;
+    $('mePts').textContent = mine.score;
+    const rank = list.findIndex(p=>p.id===meId)+1;
+    $('meSt').textContent = 'Vas el nº '+rank+' de '+list.length+' · 💧 '+(mine.c?.agua||0);
+
+    document.querySelectorAll('.dk').forEach(b=>{
+      const d = D.find(x=>x.k === b.dataset.k);
+      b.disabled = d.p > 0 && mine.score + d.p > LIMIT;
+    });
+
+    $('warn').innerHTML = mine.score >= LIMIT-2
+      ? '<div class="warn">🛑 Has llegado al tope de cordura. Eres leyenda: ahora agua, comida y a casa en taxi. 💧</div>'
+      : (streak(mine) >= 3 ? '<div class="warn">🔥 Vas en racha. Ojo: toca un vaso de agua para seguir en la lucha.</div>' : '');
+  }
+
+  const water = [...list].sort((a,b)=>(b.c?.agua||0)-(a.c?.agua||0))[0];
+  const badges = p => {
+    let b = '';
+    if(p.id === list[0].id && p.score > 0) b += '<span class="bd">👑 líder</span>';
+    if(water && p.id === water.id && (water.c?.agua||0) > 0) b += '<span class="bd">💧 el sensato</span>';
+    if(streak(p) >= 3) b += '<span class="bd">🔥 racha</span>';
+    if(list.length > 2 && p.id === list[list.length-1].id) b += '<span class="bd">🐢 tortuga</span>';
+    if(p.score >= LIMIT) b += '<span class="bd">🏆 leyenda</span>';
     return b;
   };
 
-  const top=[list[1],list[0],list[2]], hs=[95,125,75];
-  $('pod').innerHTML=top.map((p,i)=>p
+  const top = [list[1], list[0], list[2]], hs = [95,125,75];
+  $('pod').innerHTML = top.map((p,i)=> p
     ? `<div class="pc"><div class="em">${p.av}</div><div class="nm">${esc(p.name)}</div>
        <div class="bar" style="height:${hs[i]*(0.35+0.65*p.score/max)}px">${['🥈','🥇','🥉'][i]} ${p.score}</div></div>`
-    : '<div class="pc"></div>').join('');
+    : '<div class="pc"></div>'
+  ).join('');
 
-  $('rows').innerHTML=list.map((p,i)=>`
+  $('rows').innerHTML = list.map((p,i)=> `
     <div class="row">
       <div class="rk">${i+1}</div>
       <div class="em">${p.av}</div>
@@ -200,13 +387,14 @@ function render(){
         <div class="tr"><i style="width:${p.score/max*100}%"></i></div>
       </div>
       <div class="sc">${p.score}</div>
-    </div>`).join('');
+    </div>`
+  ).join('');
 
-  if(list[0].score>0 && lastLeader && lastLeader!==list[0].id){
+  if(list[0].score > 0 && lastLeader && lastLeader !== list[0].id){
     toast('👑 ¡'+list[0].name+' toma el liderato!');
     confetti(['👑','🥂','🎉']);
   }
-  lastLeader = list[0].score>0 ? list[0].id : lastLeader;
+  lastLeader = list[0].score > 0 ? list[0].id : lastLeader;
 }
 
 function showFeed(){
@@ -214,178 +402,91 @@ function showFeed(){
     || '<div>Esperando el primer brindis…</div>';
 }
 
+/* ---------- flujo ---------- */
 function go(){
   $('join').classList.add('hide');
   $('app').classList.remove('hide');
   render();
-}
-
-async function save(p){
-  players[meId]=p;
-  render();
-  if(store){
-    try{ await store.save(meId,p); }
-    catch(e){ toast('Sin conexión, reintenta'); }
-  }
+  showFeed();
 }
 
 function drink(k){
-  const m=players[meId]; if(!m) return;
-  const d=D.find(x=>x.k===k);
-  if(d.p>0 && m.score+d.p>LIMIT) return;
-  const c={...m.c,[k]:(m.c[k]||0)+1};
-  const h=[...(m.h||[]),Date.now()].slice(-6);
-  lastK=k;
-  save({...m,c,h,score:score(c),last:{k,t:Date.now()}});
-  if(k==='agua') confetti(['💧']);
+  const m = players[meId]; if(!m) return;
+  const d = D.find(x=>x.k === k);
+  if(d.p > 0 && m.score + d.p > LIMIT) return;
+
+  const c = { ...m.c, [k]:(m.c[k]||0)+1 };
+  const h = [ ...(m.h||[]), Date.now() ].slice(-6);
+  lastK = k;
+  save({ ...m, c, h, score: score(c), last:{ k, t: Date.now() } });
+
+  if(k === 'agua') confetti(['💧']);
 }
 
-/* ---------------- STORE: LOCAL ---------------- */
-function localStore(){
-  const KEY='mp_players_v1';
-  const subs=[];
-  const read=()=>{ try{ return JSON.parse(localStorage.getItem(KEY))||{}; }catch(e){ return {}; } };
-  const write=o=>{ try{ localStorage.setItem(KEY,JSON.stringify(o)); }catch(e){} };
-  const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('mp_players') : null;
-  const emit=()=>{ const all=read(); subs.forEach(f=>f(all)); };
-
-  window.addEventListener('storage',e=>{ if(e.key===KEY) emit(); });
-  if(bc) bc.onmessage=()=>emit();
-
-  return {
-    mode:'local',
-    async save(id,data){
-      const all=read(); all[id]=data; write(all);
-      if(bc) bc.postMessage(1);
-      emit();
-    },
-    subscribe(cb){ subs.push(cb); emit(); }
-  };
-}
-
-/* ---------------- STORE: FIREBASE ---------------- */
-async function firestoreStore(cfg, collName){
-  const V='10.12.2';
-  const {initializeApp} = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`);
-  const {getFirestore, collection, doc, setDoc, onSnapshot} =
-    await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
-
-  const app=initializeApp(cfg);
-  const db=getFirestore(app);
-  const col=collection(db, collName);
-  const subs=[];
-
-  onSnapshot(col, snap=>{
-    const all={};
-    snap.forEach(d=>{ all[d.id]=d.data(); });
-    subs.forEach(f=>f(all));
-  }, err=>console.warn('snapshot error',err));
-
-  return {
-    mode:'firebase',
-    async save(id,data){ await setDoc(doc(col,id), data); },
-    subscribe(cb){ subs.push(cb); }
-  };
-}
-
-/* ---------------- SNAPSHOT HANDLER ---------------- */
-function onPlayers(all){
-  const first=!ready;
-  const prev=players;
-  players=all||{};
-
-  if(!first){
-    let changed=false;
-    Object.entries(players).forEach(([id,p])=>{
-      if(id===meId || !p || !p.last || !p.last.k) return;
-      const q=prev[id];
-      const prevT=(q && q.last && q.last.t) || 0;
-      if(p.last.t > t0-2000 && p.last.t > prevT){
-        const d=D.find(x=>x.k===p.last.k);
-        if(d){
-          feed.unshift(`${p.av} <b>${esc(p.name)}</b> se ha tomado ${
-            d.k==='agua' ? 'un agua 💧 (qué sensato)' : 'un '+d.n.toLowerCase()+' '+d.e
-          }`);
-          changed=true;
-        }
-      }
-    });
-    if(changed) showFeed();
-  }
-
-  ready=true;
-  if(players[meId]) go();
-  else { $('join').classList.remove('hide'); $('app').classList.add('hide'); }
-  render();
-}
-
-/* ---------------- UI WIRING ---------------- */
-$('btns').innerHTML=D.map(d=>
+/* ---------- wiring ---------- */
+$('btns').innerHTML = D.map(d =>
   `<button class="dk" data-k="${d.k}"><b>${d.e}</b>${d.n}<br><small>${d.p?'+'+d.p:'bonus'}</small></button>`
 ).join('');
 
-$('btns').onclick=e=>{
-  const b=e.target.closest('.dk');
+$('btns').onclick = e => {
+  const b = e.target.closest('.dk');
   if(b && !b.disabled) drink(b.dataset.k);
 };
 
-$('avs').innerHTML=AVS.map(a=>`<button class="av${a===av?' on':''}">${a}</button>`).join('');
-$('avs').onclick=e=>{
-  const b=e.target.closest('.av'); if(!b) return;
-  av=b.textContent;
-  document.querySelectorAll('.av').forEach(x=>x.classList.toggle('on',x===b));
+$('avs').innerHTML = AVS.map(a => `<button class="av${a===av?' on':''}">${a}</button>`).join('');
+$('avs').onclick = e => {
+  const b = e.target.closest('.av'); if(!b) return;
+  av = b.textContent;
+  document.querySelectorAll('.av').forEach(x=>x.classList.toggle('on', x===b));
 };
 
-$('joinBtn').onclick=()=>{
-  const n=$('nick').value.trim();
+$('joinBtn').onclick = () => {
+  const n = $('nick').value.trim();
   if(!n){ $('nick').focus(); return; }
-  const existing=players[meId];
+  const existing = players[meId];
   save({
-    name:n, av,
-    c: existing?.c||{},
-    score: existing?.score||0,
-    h: existing?.h||[],
-    last: existing?.last||{k:null,t:Date.now()}
+    name: n, av,
+    c: existing?.c || {},
+    score: existing?.score || 0,
+    h: existing?.h || [],
+    last: existing?.last || { k:null, t: Date.now() }
   });
   go();
 };
 
-$('undo').onclick=()=>{
-  const m=players[meId];
-  if(!lastK || !m || !m.c[lastK]) return;
-  const c={...m.c,[lastK]:m.c[lastK]-1};
-  save({...m,c,h:(m.h||[]).slice(0,-1),score:score(c)});
-  lastK=null;
+$('undo').onclick = () => {
+  const m = players[meId];
+  if(!lastK || !m || !m.c || !m.c[lastK]) return;
+  const c = { ...m.c, [lastK]: m.c[lastK]-1 };
+  save({ ...m, c, h:(m.h||[]).slice(0,-1), score: score(c) });
+  lastK = null;
 };
 
-/* ---------------- INIT ---------------- */
-(async()=>{
+/* ================================================================
+   BOOTSTRAP
+   ================================================================ */
+(async () => {
   $('join').classList.remove('hide');
 
-  const configured = FIREBASE.enabled
-    && FIREBASE.config.apiKey
-    && !String(FIREBASE.config.apiKey).startsWith('TU_');
-
-  if(configured){
+  if(REMOTE_OK){
+    setStatus('Conectando…', false);
     try{
-      store = await firestoreStore(FIREBASE.config, FIREBASE.collectionName);
-      $('foot').textContent='Ranking compartido activo · Firestore';
+      const d = await readViaRaw();
+      players = d.players || {};
+      lastPollTime = Date.now();
+      setStatus('Sincronizado', true);
     }catch(e){
       console.warn(e);
-      store = localStore();
-      toast('Firebase no disponible: modo local');
-      $('foot').textContent='Modo local (solo este dispositivo)';
+      setStatus('Sin conexión inicial', false);
     }
-  }else{
-    store = localStore();
-    $('foot').textContent='Modo local (solo este dispositivo) · configura Firebase para el ranking compartido';
+    pollingTimer = setInterval(poll, GH.pollMs);
+  } else {
+    initLocalMode();
   }
 
-  store.subscribe(onPlayers);
-
-  setTimeout(()=>{
-    if(!ready){ $('join').classList.remove('hide'); }
-  },3000);
+  if(players[meId]) go();
+  else { $('join').classList.remove('hide'); $('app').classList.add('hide'); }
+  render();
 })();
 </script>
 </body>
