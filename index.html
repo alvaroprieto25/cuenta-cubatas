@@ -78,20 +78,21 @@ button{font:inherit;cursor:pointer}
 
 <div class="foot" id="foot">Cargando…</div>
 
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"
+        onerror="window.__mqttLoadFailed=true"></script>
 <script>
 /* ================================================================
-   CONFIGURACIÓN — rellena el token fine-grained de GitHub.
-   Si lo dejas como está, la app funciona en modo local (un móvil).
+   CANAL PÚBLICO MQTT
+   ----------------------------------------------------------------
+   Cambia TOPIC si quieres otro "canal" (basta con que todos los
+   móviles usen el mismo). El sufijo random reduce la posibilidad
+   de que alguien ajeno al evento use el mismo canal.
+   Brokers públicos de respaldo (por si HiveMQ falla):
+     wss://broker.emqx.io:8084/mqtt
+     wss://mqtt.eclipseprojects.io/mqtt
    ================================================================ */
-const GH = {
-  owner:  'alvaroprieto25',
-  repo:   'cuenta-cubatas',
-  path:   'data.json',
-  branch: 'main',
-  token:  'REEMPLAZA_CON_TU_TOKEN',
-  pollMs: 20000
-};
-/* ================================================================ */
+const MQTT_URL   = 'wss://broker.hivemq.com:8884/mqtt';
+const TOPIC_BASE = 'bodaMJ2025-v1/players/';
 
 const D=[
   {k:'cana',e:'🍺',n:'Caña',p:1},
@@ -103,9 +104,6 @@ const D=[
 ];
 const AVS=['🦁','🐯','🦊','🐺','🐸','🦄','🐙','🦖','🐧','🤠','😎','🥳'];
 const LIMIT=14;
-const LOCAL_KEY='mp_boda_v2';
-
-const REMOTE_OK = GH.token && !GH.token.startsWith('REEMPLAZA') && GH.token.length > 20;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=id=>document.getElementById(id);
@@ -117,11 +115,8 @@ let av = AVS[Math.floor(Math.random()*AVS.length)];
 let lastLeader = null;
 let lastK = null;
 let feed = [];
-let isSaving = false;
-let pending = null;
-let bc = null;
-let lastPollTime = 0;
-let pollingTimer = null;
+let client = null;
+let synced = false;
 
 try{ meId = localStorage.getItem('mp_id'); }catch(e){}
 if(!meId){
@@ -129,24 +124,10 @@ if(!meId){
   try{ localStorage.setItem('mp_id', meId); }catch(e){}
 }
 
-const score = c => D.reduce((s,d)=>s+(c[d.k]||0)*d.p,0);
+const score  = c => D.reduce((s,d)=>s+(c[d.k]||0)*d.p,0);
 const streak = p => (p.h||[]).filter(t=>Date.now()-t<20*60000).length;
 const sorted = () => Object.entries(players).map(([id,p])=>({id,...p}))
   .sort((a,b)=>b.score-a.score || (a.last?.t||0)-(b.last?.t||0));
-
-/* ---------- utils base64 unicode-safe ---------- */
-function b64e(str){
-  const bytes = new TextEncoder().encode(str);
-  let bin = '';
-  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-function b64d(b64){
-  const bin = atob(b64.replace(/\n/g,''));
-  const bytes = new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
 
 /* ---------- UI helpers ---------- */
 function toast(t){
@@ -170,168 +151,110 @@ function setStatus(txt, ok){
 }
 
 /* ================================================================
-   CAPA REMOTA: GitHub Contents API
+   MQTT
    ================================================================ */
-async function readViaRaw(){
-  const url = `https://raw.githubusercontent.com/${GH.owner}/${GH.repo}/${GH.branch}/${GH.path}?t=${Date.now()}`;
-  const r = await fetch(url, { cache:'no-store' });
-  if(r.status === 404) return { players:{} };
-  if(!r.ok) throw new Error('read '+r.status);
-  return await r.json();
+function publishMine(){
+  if(!client || !client.connected) return;
+  const m = players[meId];
+  if(!m) return;
+  try{
+    client.publish(TOPIC_BASE + meId, JSON.stringify(m), { qos:1, retain:true });
+  }catch(e){ console.warn('publish', e); }
 }
 
-async function commitChange(mutator){
-  const apiUrl = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}`;
-  const headers = {
-    Authorization: `Bearer ${GH.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28'
-  };
+function handleMessage(topic, payload){
+  if(!topic.startsWith(TOPIC_BASE)) return;
+  const pid = topic.slice(TOPIC_BASE.length);
+  if(!pid || pid.includes('/')) return;
 
-  for(let attempt=0; attempt<4; attempt++){
-    // 1) Leer estado actual (con auth para tener SHA y contenido frescos)
-    const gR = await fetch(apiUrl + '?ref=' + encodeURIComponent(GH.branch), { headers });
-    let current = { players:{} }, curSha = null;
-    if(gR.ok){
-      const g = await gR.json();
-      curSha = g.sha;
-      try { current = JSON.parse(b64d(g.content)); } catch(e){}
-    } else if(gR.status !== 404){
-      throw new Error('read '+gR.status);
+  let p;
+  try{ p = JSON.parse(payload.toString()); }catch(e){ return; }
+  if(!p || !p.name) return;
+
+  const prev = players[pid];
+  const oldT = prev?.last?.t || 0;
+
+  // Feed: solo cambios ajenos y ya sincronizado
+  if(synced && pid !== meId && p.last?.k && p.last.t > oldT){
+    const d = D.find(x=>x.k === p.last.k);
+    if(d){
+      feed.unshift(`${p.av} <b>${esc(p.name)}</b> se ha tomado ${
+        d.k === 'agua' ? 'un agua 💧 (qué sensato)' : 'un '+d.n.toLowerCase()+' '+d.e
+      }`);
+      showFeed();
     }
-    if(!current.players) current.players = {};
+  }
 
-    // 2) Aplicar SOLO mi cambio
-    const next = mutator(JSON.parse(JSON.stringify(current)));
+  // Estado propio (retained al entrar): adoptar solo si es más nuevo
+  if(pid === meId){
+    const mine = players[meId];
+    if(!mine || (p.last?.t || 0) > (mine.last?.t || 0)){
+      players[meId] = p;
+    }
+  } else {
+    players[pid] = p;
+  }
+  render();
+}
 
-    // 3) Escribir
-    const body = {
-      message: `update ${new Date().toISOString().slice(0,19)}Z`,
-      content: b64e(JSON.stringify(next, null, 2)),
-      branch:  GH.branch
-    };
-    if(curSha) body.sha = curSha;
-
-    const pR = await fetch(apiUrl, {
-      method: 'PUT',
-      headers: { ...headers, 'Content-Type':'application/json' },
-      body: JSON.stringify(body)
+function connectMQTT(){
+  return new Promise((resolve, reject) => {
+    if(window.__mqttLoadFailed || typeof mqtt === 'undefined'){
+      return reject(new Error('mqtt no disponible'));
+    }
+    client = mqtt.connect(MQTT_URL, {
+      clientId: 'mj_'+Math.random().toString(16).slice(2,10),
+      clean: true,
+      reconnectPeriod: 2500,
+      connectTimeout: 10000,
+      keepalive: 30
     });
 
-    if(pR.ok) return next;
-    if(pR.status === 409){ // conflicto, alguien escribió antes
-      await new Promise(r=>setTimeout(r, 300 + Math.random()*600));
-      continue;
-    }
-    throw new Error('write '+pR.status+' '+await pR.text());
-  }
-  throw new Error('conflicto tras reintentos');
+    let done = false;
+    const fail = () => { if(!done){ done = true; reject(new Error('timeout')); } };
+
+    client.on('connect', () => {
+      client.subscribe(TOPIC_BASE + '+', { qos:1 }, err => {
+        if(err){ console.warn('sub', err); return; }
+        // Re-publicar mi estado local (por si el broker perdió retained)
+        publishMine();
+        if(!done){ done = true; resolve(); }
+      });
+      // Tras 1,5 s de suscripción, marcar como sincronizado
+      setTimeout(()=>{ synced = true; }, 1500);
+      setStatus('Conectado en vivo', true);
+    });
+
+    client.on('message', handleMessage);
+
+    client.on('reconnect', () => setStatus('Reconectando…', false));
+    client.on('offline',   () => setStatus('Sin conexión', false));
+    client.on('error', e   => { console.warn('mqtt', e); });
+
+    setTimeout(fail, 12000);
+  });
 }
 
-/* ================================================================
-   MODO LOCAL (fallback si no hay token)
-   ================================================================ */
-function initLocalMode(){
+/* ---------- fallback local ---------- */
+function localFallback(){
+  setStatus('Modo local (solo este móvil) · sin conexión al broker', false);
+  const KEY='mp_boda_local';
   try{
-    const saved = JSON.parse(localStorage.getItem(LOCAL_KEY));
-    if(saved && saved.players) players = saved.players;
-  }catch(e){}
-  window.addEventListener('storage', e => { if(e.key===LOCAL_KEY) loadLocal(); });
-  if('BroadcastChannel' in window){
-    bc = new BroadcastChannel('mp_boda');
-    bc.onmessage = () => loadLocal();
-  }
-  setStatus('Modo local (solo este móvil) · configura el token para el ranking compartido', true);
-}
-function loadLocal(){
-  try{
-    const saved = JSON.parse(localStorage.getItem(LOCAL_KEY));
-    players = (saved && saved.players) || {};
-    render();
+    const d=JSON.parse(localStorage.getItem(KEY));
+    if(d && d.players) players = d.players;
   }catch(e){}
 }
 function writeLocal(){
-  try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ players })); }catch(e){}
-  if(bc) bc.postMessage(1);
+  try{ localStorage.setItem('mp_boda_local', JSON.stringify({ players })); }catch(e){}
 }
 
-/* ================================================================
-   GUARDAR (cola para no pisar cambios)
-   ================================================================ */
-async function save(myPlayer){
-  players[meId] = myPlayer;
+/* ---------- guardado ---------- */
+function save(p){
+  players[meId] = p;
+  try{ localStorage.setItem('mp_mine', JSON.stringify(p)); }catch(e){}
   render();
-
-  if(!REMOTE_OK){
-    writeLocal();
-    return;
-  }
-
-  if(isSaving){ pending = myPlayer; return; }
-
-  isSaving = true;
-  setStatus('Guardando…', false);
-
-  try{
-    const newState = await commitChange(state => {
-      state.players = state.players || {};
-      state.players[meId] = myPlayer;
-      return state;
-    });
-    players = newState.players || {};
-    render();
-    setStatus('Sincronizado', true);
-  }catch(e){
-    console.error(e);
-    toast('⚠️ No se pudo guardar. Reintentando…');
-    setStatus('Error de red · reintentando', false);
-    try{
-      const d = await readViaRaw();
-      players = d.players || {};
-      render();
-    }catch(_){}
-  }finally{
-    isSaving = false;
-    if(pending){
-      const p = pending; pending = null;
-      save(p);
-    }
-  }
-}
-
-/* ================================================================
-   POLLING: leer cambios de otros cada 20 s
-   ================================================================ */
-async function poll(){
-  if(isSaving) return; // no pisar mi estado optimista
-  try{
-    const data = await readViaRaw();
-    const newPlayers = data.players || {};
-    const isFirst = lastPollTime === 0;
-
-    Object.entries(newPlayers).forEach(([id,p])=>{
-      if(id === meId || !p || !p.last || !p.last.k) return;
-      const q = players[id];
-      const oldT = (q && q.last && q.last.t) || 0;
-      if(!isFirst && p.last.t > oldT){
-        const d = D.find(x=>x.k === p.last.k);
-        if(d){
-          feed.unshift(`${p.av} <b>${esc(p.name)}</b> se ha tomado ${
-            d.k === 'agua' ? 'un agua 💧 (qué sensato)' : 'un '+d.n.toLowerCase()+' '+d.e
-          }`);
-        }
-      }
-    });
-
-    players = newPlayers;
-    render();
-    showFeed();
-    lastPollTime = Date.now();
-    setStatus('Sincronizado', true);
-  }catch(e){
-    console.warn('poll', e);
-    setStatus('Sin conexión · reintentando', false);
-  }
+  if(client && client.connected) publishMine();
+  else writeLocal();
 }
 
 /* ================================================================
@@ -339,7 +262,7 @@ async function poll(){
    ================================================================ */
 function render(){
   const list = sorted();
-  if(!list.length){ return; }
+  if(!list.length) return;
   const max = Math.max(1, ...list.map(p=>p.score));
   const mine = players[meId];
 
@@ -458,30 +381,25 @@ $('undo').onclick = () => {
   const m = players[meId];
   if(!lastK || !m || !m.c || !m.c[lastK]) return;
   const c = { ...m.c, [lastK]: m.c[lastK]-1 };
-  save({ ...m, c, h:(m.h||[]).slice(0,-1), score: score(c) });
+  save({ ...m, c, h:(m.h||[]).slice(-1)[0] ? (m.h||[]).slice(0,-1) : (m.h||[]), score: score(c) });
   lastK = null;
 };
 
-/* ================================================================
-   BOOTSTRAP
-   ================================================================ */
+/* ---------- bootstrap ---------- */
 (async () => {
   $('join').classList.remove('hide');
 
-  if(REMOTE_OK){
-    setStatus('Conectando…', false);
-    try{
-      const d = await readViaRaw();
-      players = d.players || {};
-      lastPollTime = Date.now();
-      setStatus('Sincronizado', true);
-    }catch(e){
-      console.warn(e);
-      setStatus('Sin conexión inicial', false);
-    }
-    pollingTimer = setInterval(poll, GH.pollMs);
-  } else {
-    initLocalMode();
+  // Recuperar mi estado de localStorage por si el broker perdió retained
+  try{
+    const mine = JSON.parse(localStorage.getItem('mp_mine'));
+    if(mine && mine.name) players[meId] = mine;
+  }catch(e){}
+
+  try{
+    await connectMQTT();
+  }catch(e){
+    console.warn(e);
+    localFallback();
   }
 
   if(players[meId]) go();
