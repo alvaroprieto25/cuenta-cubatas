@@ -6,30 +6,25 @@
 <title>Cuenta Cubatas</title>
 <meta name="theme-color" content="#fbf6ec">
 
-<!-- Preconnect: ahorra ~100-300 ms en el handshake TLS del WebSocket -->
 <link rel="preconnect" href="https://broker.hivemq.com" crossorigin>
 <link rel="dns-prefetch" href="https://broker.emqx.io">
 
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="./styles.css">
 
-<!-- defer: descarga en paralelo, ejecuta en orden tras el parse -->
 <script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js" defer
         onerror="window.__mqttLoadFailed=true"></script>
-<script src="app.js" defer></script>
+<script src="./app.js" defer></script>
 </head>
 <body>
 
-<!-- OVERLAY: bloquea TODA interacción hasta estar conectado -->
 <div id="overlay">
   <div class="spinner" id="overlay-spinner"></div>
   <div id="overlay-text">Conectando…</div>
   <button id="overlay-retry" class="hide">Reintentar</button>
 </div>
 
-<!-- APP (oculta hasta estar ready) -->
 <div id="app" class="hide">
 
-  <!-- ============== VISTA: LISTA DE EVENTOS ============== -->
   <div id="view-list" class="hide">
     <h1>🍻 Cuenta Cubatas</h1>
     <div class="sub"><span class="live"></span>Eventos en vivo</div>
@@ -48,7 +43,6 @@
     <div id="events-list"></div>
   </div>
 
-  <!-- ============== VISTA: DETALLE DE EVENTO ============== -->
   <div id="view-event" class="hide">
     <button id="btn-back" class="sm">← Eventos</button>
     <h2 id="ev-name">…</h2>
