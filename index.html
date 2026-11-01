@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Boda de Mónica y Josan · Ranking en vivo</title>
+<title>Cuenta Cubatas</title>
 <meta name="theme-color" content="#fbf6ec">
 <style>
 :root{--bg:#fbf6ec;--card:#fff;--ink:#2b2118;--mut:#8a7a68;--gold:#c9962b;--rose:#d9577a;--line:#eadfca;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -12,13 +12,15 @@
 *{box-sizing:border-box}html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;padding:14px 14px 40px;max-width:520px;margin:auto}
 h1{font-family:Georgia,"Times New Roman",serif;font-size:26px;margin:6px 0 0;text-align:center}
+h2{font-family:Georgia,serif;font-size:20px;margin:6px 0 4px;text-align:center;font-weight:600}
 .sub{text-align:center;color:var(--mut);font-size:13px;margin-bottom:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;margin:12px 0}
 .live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2ecc71;margin-right:6px;animation:p 1.4s infinite}
 @keyframes p{50%{opacity:.25}}
-input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:16px}
+input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:16px;font-family:inherit}
 button{font:inherit;cursor:pointer}
 .go{width:100%;margin-top:10px;padding:13px;border:0;border-radius:12px;background:var(--gold);color:#2b2118;font-weight:700}
+.go:disabled{opacity:.4;cursor:not-allowed}
 .avs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
 .av{font-size:24px;padding:4px 8px;border-radius:12px;border:2px solid transparent;background:var(--bg)}
 .av.on{border-color:var(--gold)}
@@ -42,369 +44,803 @@ button{font:inherit;cursor:pointer}
 .sm{background:none;border:0;color:var(--mut);font-size:13px;text-decoration:underline;padding:6px}
 .fx{position:fixed;top:-30px;font-size:26px;z-index:9;pointer-events:none;animation:f 2.4s ease-in forwards}
 @keyframes f{to{transform:translateY(105vh) rotate(360deg);opacity:.2}}
-.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:14px;z-index:10;font-weight:600;max-width:90%;text-align:center}
-.hide{display:none}
+.toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:14px;z-index:200;font-weight:600;opacity:0;transition:.25s;pointer-events:none}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.hide{display:none!important}
 .foot{text-align:center;color:var(--mut);font-size:11px;margin-top:14px}
 .foot b{color:var(--gold)}
+
+/* Overlay de conexión */
+#overlay{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;
+         align-items:center;justify-content:center;gap:16px;color:var(--mut);font-weight:600}
+.spinner{width:36px;height:36px;border:3px solid var(--line);border-top-color:var(--gold);
+         border-radius:50%;animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Lista de eventos */
+.event{display:flex;justify-content:space-between;align-items:center;gap:12px;cursor:pointer;
+       background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;margin:10px 0;
+       text-align:left;color:var(--ink);font:inherit;width:100%}
+.event-name{font-weight:700}
+.badge{font-size:12px;font-weight:700;padding:5px 10px;border-radius:999px;white-space:nowrap}
+.badge.ok{background:rgba(46,204,113,.15);color:#1e8e4d}
+.badge.bad{background:rgba(217,87,122,.15);color:var(--rose)}
 </style>
 </head>
 <body>
-<h1>🥂 Boda de Mónica y Josan 💍</h1>
-<div class="sub"><span class="live"></span>Ranking en vivo · Sevilla · ¡a por la corona! 👑</div>
 
-<div id="join" class="card hide">
-  <b>¿Quién eres, campeón?</b>
-  <input id="nick" maxlength="14" placeholder="Tu nombre o mote" autocomplete="off">
-  <div class="avs" id="avs"></div>
-  <button class="go" id="joinBtn">¡Entrar a la competición!</button>
+<!-- OVERLAY: bloquea TODO hasta que el broker esté listo y la sincronización termine -->
+<div id="overlay">
+  <div class="spinner"></div>
+  <div id="overlay-text">Conectando…</div>
 </div>
 
+<!-- APP (oculta hasta estar ready) -->
 <div id="app" class="hide">
-  <div class="card">
-    <div class="me">
-      <div><span id="meAv" style="font-size:28px"></span> <b id="meNm"></b>
-        <div class="sub" style="margin:0;text-align:left" id="meSt"></div>
+
+  <!-- ============== VISTA: LISTA DE EVENTOS ============== -->
+  <div id="view-list" class="hide">
+    <h1>🍻 Cuenta Cubatas</h1>
+    <div class="sub"><span class="live"></span>Eventos en vivo</div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span id="admin-state" style="font-size:13px;color:var(--mut)">Modo jugador</span>
+        <span>
+          <button id="btn-admin-login" class="sm">🔐 Admin</button>
+          <button id="btn-admin-logout" class="sm hide">Salir admin</button>
+        </span>
       </div>
-      <div class="pts" id="mePts">0</div>
+      <button id="btn-new-event" class="go hide">+ Nuevo evento</button>
     </div>
-    <div class="grid" id="btns"></div>
-    <div id="warn"></div>
-    <button class="sm" id="undo">↩︎ Deshacer última</button>
+
+    <div id="events-list"></div>
   </div>
-  <div class="card"><div class="pod" id="pod"></div><div id="rows"></div></div>
-  <div class="card"><b>📣 Última hora</b><div class="feed" id="feed"><div>Esperando el primer brindis…</div></div></div>
-  <div class="sub">Reglas: caña, rebujito y vino = 1 pt · chupito = 1 · copazo = 2 · agua = 0 pero te da el título de “El sensato” 💧. Tope de cordura: 14 pts. Quien conduce, no compite.</div>
+
+  <!-- ============== VISTA: DETALLE DE EVENTO ============== -->
+  <div id="view-event" class="hide">
+    <button id="btn-back" class="sm">← Eventos</button>
+    <h2 id="ev-name">…</h2>
+    <div class="sub" id="ev-status"></div>
+
+    <div id="ev-join" class="card hide">
+      <b>¿Quién eres, campeón?</b>
+      <input id="nick" maxlength="14" placeholder="Tu nombre o mote" autocomplete="off">
+      <div class="avs" id="avs"></div>
+      <button class="go" id="joinBtn">¡Entrar a la competición!</button>
+    </div>
+
+    <div id="ev-content" class="hide">
+      <div class="card">
+        <div class="me">
+          <div><span id="meAv" style="font-size:28px"></span> <b id="meNm"></b>
+            <div class="sub" style="margin:0;text-align:left" id="meSt"></div>
+          </div>
+          <div class="pts" id="mePts">0</div>
+        </div>
+        <div class="grid" id="btns"></div>
+        <div id="warn"></div>
+        <button class="sm" id="undo">↩︎ Deshacer última</button>
+      </div>
+
+      <div class="card"><div class="pod" id="pod"></div><div id="rows"></div></div>
+
+      <div class="card"><b>📣 Última hora</b>
+        <div class="feed" id="feed"><div>Esperando el primer brindis…</div></div>
+      </div>
+
+      <div id="admin-panel" class="card hide">
+        <b>⚙️ Panel de admin</b>
+
+        <div style="margin-top:10px;font-weight:600;font-size:14px">Añadir ítem</div>
+        <div style="display:grid;grid-template-columns:56px 1fr 64px;gap:6px;margin-top:6px">
+          <input id="new-item-emoji" value="🍹" maxlength="4" style="text-align:center;padding:10px">
+          <input id="new-item-name" placeholder="Nombre" style="padding:10px">
+          <input id="new-item-points" type="number" value="1" min="0" style="padding:10px">
+        </div>
+        <button id="btn-add-item" class="go">+ Añadir</button>
+
+        <div style="margin-top:14px;font-weight:600;font-size:14px">Ítems del evento</div>
+        <div id="items-manage" style="margin-top:6px"></div>
+
+        <button id="btn-finish-event"
+                style="width:100%;margin-top:14px;padding:12px;border:0;border-radius:12px;
+                       background:var(--rose);color:#fff;font-weight:700">🏁 Finalizar evento</button>
+      </div>
+    </div>
+  </div>
 </div>
 
-<div class="foot" id="foot">Cargando…</div>
+<div id="toast" class="toast"></div>
+<div class="foot" id="foot">Cuenta Cubatas · v2</div>
 
 <script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"
         onerror="window.__mqttLoadFailed=true"></script>
 <script>
-/* ================================================================
-   CANAL PÚBLICO MQTT
-   ----------------------------------------------------------------
-   Cambia TOPIC si quieres otro "canal" (basta con que todos los
-   móviles usen el mismo). El sufijo random reduce la posibilidad
-   de que alguien ajeno al evento use el mismo canal.
-   Brokers públicos de respaldo (por si HiveMQ falla):
-     wss://broker.emqx.io:8084/mqtt
-     wss://mqtt.eclipseprojects.io/mqtt
-   ================================================================ */
+/* ==============================================================
+   CONFIG
+   ============================================================== */
 const MQTT_URL   = 'wss://broker.hivemq.com:8884/mqtt';
-const TOPIC_BASE = 'bodaMJ2025-v1/players/';
+const BASE       = 'cuenta-cubatas-v2';
+const EVENTS_TOPIC   = BASE + '/events';
+const ITEMS_TOPIC    = eid => `${BASE}/events/${eid}/items`;
+const PLAYER_TOPIC   = (eid,pid) => `${BASE}/events/${eid}/players/${pid}`;
+const PLAYERS_PREFIX = eid => `${BASE}/events/${eid}/players/`;
 
-const D=[
-  {k:'cana',e:'🍺',n:'Caña',p:1},
-  {k:'rebujito',e:'🌸',n:'Rebujito',p:1},
-  {k:'vino',e:'🍷',n:'Vino',p:1},
-  {k:'copa',e:'🍸',n:'Copazo',p:2},
-  {k:'chupito',e:'🥃',n:'Chupito',p:1},
-  {k:'agua',e:'💧',n:'Agua',p:0}
-];
-const AVS=['🦁','🐯','🦊','🐺','🐸','🦄','🐙','🦖','🐧','🤠','😎','🥳'];
-const LIMIT=14;
+/* ⚠️  Cambia esta contraseña por la tuya (solo es UI-gate; no es seguridad real) */
+const ADMIN_PASSWORD = 'cubatas2025';
 
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const $=id=>document.getElementById(id);
+const AVS = ['🦁','🐯','🦊','🐺','🐸','🦄','🐙','🦖','🐧','🤠','😎','🥳','🐉','🐨','🐮','🦉'];
 
-/* ---------- estado ---------- */
-let players = {};
-let meId = null;
-let av = AVS[Math.floor(Math.random()*AVS.length)];
-let lastLeader = null;
+const DEFAULT_ITEMS = {
+  cana:     { emoji:'🍺', name:'Caña',     points:1 },
+  rebujito: { emoji:'🌸', name:'Rebujito', points:1 },
+  vino:     { emoji:'🍷', name:'Vino',     points:1 },
+  copa:     { emoji:'🍸', name:'Copazo',   points:2 },
+  chupito:  { emoji:'🥃', name:'Chupito',  points:1 },
+  agua:     { emoji:'💧', name:'Agua',     points:0 }
+};
+
+/* ==============================================================
+   ESTADO
+   ============================================================== */
+let client = null;
+let connected = false;          // broker conectado
+let firstConnect = true;        // para el texto del overlay
+let ready = false;              // broker + suscripciones + retained recibidos
+
+let events = {};                // { id: {name,status,createdAt,finishedAt} }
+let items = {};                 // ítems del evento actual
+let players = {};               // jugadores del evento actual
+let currentEventId = null;
+let subscribedEid = null;
+let currentView = 'list';       // 'list' | 'event'
+
+let meId = null;                // id persistente del dispositivo
+let avatar = AVS[0];
+let isAdmin = false;
 let lastK = null;
 let feed = [];
-let client = null;
-let synced = false;
+let lastLeader = null;
+let lastMsgTime = 0;
 
-try{ meId = localStorage.getItem('mp_id'); }catch(e){}
-if(!meId){
-  meId = 'p'+Math.random().toString(36).slice(2,10);
-  try{ localStorage.setItem('mp_id', meId); }catch(e){}
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ==============================================================
+   TOAST / CONFETI / OVERLAY
+   ============================================================== */
+let toastTimer;
+function toast(msg){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-const score  = c => D.reduce((s,d)=>s+(c[d.k]||0)*d.p,0);
-const streak = p => (p.h||[]).filter(t=>Date.now()-t<20*60000).length;
-const sorted = () => Object.entries(players).map(([id,p])=>({id,...p}))
-  .sort((a,b)=>b.score-a.score || (a.last?.t||0)-(b.last?.t||0));
-
-/* ---------- UI helpers ---------- */
-function toast(t){
-  const e=document.createElement('div');
-  e.className='toast'; e.textContent=t;
-  document.body.appendChild(e);
-  setTimeout(()=>e.remove(),3000);
-}
 function confetti(set){
   for(let i=0;i<26;i++){
-    const e=document.createElement('div');
-    e.className='fx'; e.textContent=set[i%set.length];
-    e.style.left=Math.random()*100+'vw';
-    e.style.animationDelay=Math.random()*.8+'s';
+    const e = document.createElement('div');
+    e.className = 'fx'; e.textContent = set[i % set.length];
+    e.style.left = Math.random()*100 + 'vw';
+    e.style.animationDelay = Math.random()*.8 + 's';
     document.body.appendChild(e);
-    setTimeout(()=>e.remove(),3400);
+    setTimeout(() => e.remove(), 3400);
   }
 }
-function setStatus(txt, ok){
-  $('foot').innerHTML = ok ? '<b>●</b> '+txt : txt;
+
+function updateOverlay(){
+  const show = !ready;
+  $('overlay').classList.toggle('hide', !show);
+  $('app').classList.toggle('hide', show);
+  if(show){
+    let txt = 'Conectando…';
+    if(!firstConnect && !connected) txt = 'Reconectando…';
+    else if(connected && !ready)    txt = 'Sincronizando…';
+    $('overlay-text').textContent = txt;
+  }
 }
 
-/* ================================================================
+/* ==============================================================
+   LÓGICA DE JUGADORES / PUNTOS
+   ============================================================== */
+function scoreOf(p){
+  if(!p || !p.c) return 0;
+  return Object.entries(p.c).reduce((s,[k,n]) => {
+    const it = items[k];
+    return s + (it ? (it.points || 0) * n : 0);
+  }, 0);
+}
+
+function totalDrinks(p){
+  return Object.values(p?.c || {}).reduce((s,n)=>s+n,0);
+}
+
+function streak(p){
+  return (p.h || []).filter(t => Date.now() - t < 20*60000).length;
+}
+
+function sortedPlayers(){
+  return Object.entries(players)
+    .map(([id,p]) => ({ id, ...p, score: scoreOf(p) }))
+    .sort((a,b) => b.score - a.score || (a.last?.t||0) - (b.last?.t||0));
+}
+
+/* ==============================================================
    MQTT
-   ================================================================ */
-function publishMine(){
-  if(!client || !client.connected) return;
-  const m = players[meId];
-  if(!m) return;
-  try{
-    client.publish(TOPIC_BASE + meId, JSON.stringify(m), { qos:1, retain:true });
-  }catch(e){ console.warn('publish', e); }
-}
-
+   ============================================================== */
 function handleMessage(topic, payload){
-  if(!topic.startsWith(TOPIC_BASE)) return;
-  const pid = topic.slice(TOPIC_BASE.length);
-  if(!pid || pid.includes('/')) return;
+  lastMsgTime = Date.now();
 
-  let p;
-  try{ p = JSON.parse(payload.toString()); }catch(e){ return; }
-  if(!p || !p.name) return;
+  let data;
+  try { data = JSON.parse(payload.toString()); } catch(e) { return; }
 
-  const prev = players[pid];
-  const oldT = prev?.last?.t || 0;
-
-  // Feed: solo cambios ajenos y ya sincronizado
-  if(synced && pid !== meId && p.last?.k && p.last.t > oldT){
-    const d = D.find(x=>x.k === p.last.k);
-    if(d){
-      feed.unshift(`${p.av} <b>${esc(p.name)}</b> se ha tomado ${
-        d.k === 'agua' ? 'un agua 💧 (qué sensato)' : 'un '+d.n.toLowerCase()+' '+d.e
-      }`);
-      showFeed();
+  /* --- Eventos --- */
+  if(topic === EVENTS_TOPIC){
+    events = data || {};
+    if(currentEventId && !events[currentEventId]){
+      toast('Este evento ya no existe');
+      backToList();
+      return;
     }
+    if(ready) render();
+    return;
   }
 
-  // Estado propio (retained al entrar): adoptar solo si es más nuevo
-  if(pid === meId){
-    const mine = players[meId];
-    if(!mine || (p.last?.t || 0) > (mine.last?.t || 0)){
-      players[meId] = p;
-    }
-  } else {
-    players[pid] = p;
+  if(!currentEventId) return;
+
+  /* --- Ítems del evento actual --- */
+  if(topic === ITEMS_TOPIC(currentEventId)){
+    items = data || {};
+    if(ready) renderEvent();
+    return;
   }
-  render();
+
+  /* --- Jugadores del evento actual --- */
+  const prefix = PLAYERS_PREFIX(currentEventId);
+  if(topic.startsWith(prefix)){
+    const pid = topic.slice(prefix.length);
+    if(!pid || pid.includes('/')) return;
+    if(!data || !data.name) return;
+
+    // Ignorar ecos antiguos de mis propias publicaciones
+    if(pid === meId){
+      const mine = players[meId];
+      if(mine?.last?.t && data.last?.t && data.last.t < mine.last.t) return;
+    }
+
+    // Feed de "última hora" (solo ajenos y cuando el evento ya está montado)
+    if(ready && pid !== meId && data.last?.k){
+      const prev = players[pid];
+      const oldT = prev?.last?.t || 0;
+      if(data.last.t > oldT){
+        const d = items[data.last.k];
+        if(d){
+          const txt = d.points === 0
+            ? `${data.av} <b>${esc(data.name)}</b> se ha pedido ${d.emoji} ${esc(d.name)} (el sensato)`
+            : `${data.av} <b>${esc(data.name)}</b> se ha tomado ${d.emoji} ${esc(d.name)} (+${d.points})`;
+          feed.unshift(txt);
+          if(feed.length > 6) feed.pop();
+          updateFeed();
+        }
+      }
+    }
+
+    players[pid] = data;
+    if(ready) renderEvent();
+    return;
+  }
 }
 
-function connectMQTT(){
+function connectMqtt(){
   return new Promise((resolve, reject) => {
-    if(window.__mqttLoadFailed || typeof mqtt === 'undefined'){
-      return reject(new Error('mqtt no disponible'));
-    }
+    if(window.__mqttLoadFailed || typeof mqtt === 'undefined')
+      return reject(new Error('MQTT no disponible'));
+
     client = mqtt.connect(MQTT_URL, {
-      clientId: 'mj_'+Math.random().toString(16).slice(2,10),
+      clientId: 'cc_' + Math.random().toString(16).slice(2,10),
       clean: true,
       reconnectPeriod: 2500,
       connectTimeout: 10000,
       keepalive: 30
     });
 
-    let done = false;
-    const fail = () => { if(!done){ done = true; reject(new Error('timeout')); } };
-
     client.on('connect', () => {
-      client.subscribe(TOPIC_BASE + '+', { qos:1 }, err => {
-        if(err){ console.warn('sub', err); return; }
-        // Re-publicar mi estado local (por si el broker perdió retained)
-        publishMine();
-        if(!done){ done = true; resolve(); }
+      const subs = [{ topic: EVENTS_TOPIC, qos: 1 }];
+      if(subscribedEid){
+        subs.push({ topic: ITEMS_TOPIC(subscribedEid), qos: 1 });
+        subs.push({ topic: PLAYERS_PREFIX(subscribedEid) + '+', qos: 1 });
+      }
+      client.subscribe(subs, (err) => {
+        if(err) console.warn('SUBACK err', err);
+        connected = true;
+        firstConnect = false;
+        // Esperar a que lleguen los retained y quiescencia
+        lastMsgTime = Date.now();
+        waitForQuiescence();
+        resolve();
       });
-      // Tras 1,5 s de suscripción, marcar como sincronizado
-      setTimeout(()=>{ synced = true; }, 1500);
-      setStatus('Conectado en vivo', true);
     });
 
     client.on('message', handleMessage);
 
-    client.on('reconnect', () => setStatus('Reconectando…', false));
-    client.on('offline',   () => setStatus('Sin conexión', false));
-    client.on('error', e   => { console.warn('mqtt', e); });
+    client.on('reconnect', () => {
+      connected = false; ready = false; updateOverlay();
+    });
+    client.on('offline', () => {
+      connected = false; ready = false; updateOverlay();
+    });
+    client.on('error', (e) => console.warn('MQTT', e));
 
-    setTimeout(fail, 12000);
+    setTimeout(() => { if(!connected) reject(new Error('timeout')); }, 15000);
   });
 }
 
-/* ---------- fallback local ---------- */
-function localFallback(){
-  setStatus('Modo local (solo este móvil) · sin conexión al broker', false);
-  const KEY='mp_boda_local';
-  try{
-    const d=JSON.parse(localStorage.getItem(KEY));
-    if(d && d.players) players = d.players;
-  }catch(e){}
-}
-function writeLocal(){
-  try{ localStorage.setItem('mp_boda_local', JSON.stringify({ players })); }catch(e){}
-}
-
-/* ---------- guardado ---------- */
-function save(p){
-  players[meId] = p;
-  try{ localStorage.setItem('mp_mine', JSON.stringify(p)); }catch(e){}
-  render();
-  if(client && client.connected) publishMine();
-  else writeLocal();
+/* Quiescencia: cuando llevamos 400 ms sin mensajes, consideramos cargado */
+function waitForQuiescence(){
+  const check = () => {
+    if(Date.now() - lastMsgTime > 400){
+      ready = true;
+      updateOverlay();
+      render();
+    } else {
+      setTimeout(check, 100);
+    }
+  };
+  check();
 }
 
-/* ================================================================
-   RENDER
-   ================================================================ */
+/* ==============================================================
+   PUBLICAR
+   ============================================================== */
+function publishEvents(){
+  if(!client || !client.connected) return toast('Sin conexión');
+  client.publish(EVENTS_TOPIC, JSON.stringify(events), { qos:1, retain:true });
+}
+
+function publishItems(){
+  if(!client || !client.connected) return toast('Sin conexión');
+  client.publish(ITEMS_TOPIC(currentEventId), JSON.stringify(items), { qos:1, retain:true });
+}
+
+function publishPlayer(eid, pid, data){
+  if(!client || !client.connected) return toast('Sin conexión');
+  client.publish(PLAYER_TOPIC(eid, pid), JSON.stringify(data), { qos:1, retain:true });
+  try { localStorage.setItem('cc_player_' + eid, JSON.stringify(data)); } catch(e){}
+}
+
+/* ==============================================================
+   VISTA: LISTA
+   ============================================================== */
 function render(){
-  const list = sorted();
-  if(!list.length) return;
-  const max = Math.max(1, ...list.map(p=>p.score));
-  const mine = players[meId];
+  if(!ready) return;
+  if(currentView === 'list') renderList();
+  else renderEvent();
+}
 
-  if(mine){
-    $('meAv').textContent = mine.av;
-    $('meNm').textContent = mine.name;
-    $('mePts').textContent = mine.score;
-    const rank = list.findIndex(p=>p.id===meId)+1;
-    $('meSt').textContent = 'Vas el nº '+rank+' de '+list.length+' · 💧 '+(mine.c?.agua||0);
+function renderList(){
+  $('view-list').classList.remove('hide');
+  $('view-event').classList.add('hide');
 
-    document.querySelectorAll('.dk').forEach(b=>{
-      const d = D.find(x=>x.k === b.dataset.k);
-      b.disabled = d.p > 0 && mine.score + d.p > LIMIT;
+  // Admin bar
+  $('btn-admin-login').classList.toggle('hide', isAdmin);
+  $('btn-admin-logout').classList.toggle('hide', !isAdmin);
+  $('btn-new-event').classList.toggle('hide', !isAdmin);
+  $('admin-state').textContent = isAdmin ? '✅ Modo admin' : 'Modo jugador';
+
+  // Eventos ordenados: abiertos primero, luego por fecha desc
+  const evs = Object.entries(events)
+    .map(([id,e]) => ({ id, ...e }))
+    .sort((a,b) => {
+      const aOpen = a.status !== 'finished';
+      const bOpen = b.status !== 'finished';
+      if(aOpen !== bOpen) return aOpen ? -1 : 1;
+      return (b.createdAt || 0) - (a.createdAt || 0);
     });
 
-    $('warn').innerHTML = mine.score >= LIMIT-2
-      ? '<div class="warn">🛑 Has llegado al tope de cordura. Eres leyenda: ahora agua, comida y a casa en taxi. 💧</div>'
-      : (streak(mine) >= 3 ? '<div class="warn">🔥 Vas en racha. Ojo: toca un vaso de agua para seguir en la lucha.</div>' : '');
+  $('events-list').innerHTML = evs.length
+    ? evs.map(e => `
+        <button class="event" data-open="${e.id}">
+          <div>
+            <div class="event-name">${esc(e.name || 'Evento')}</div>
+            <div class="sub" style="margin:2px 0 0;text-align:left">
+              ${e.createdAt ? new Date(e.createdAt).toLocaleDateString('es-ES',{day:'2-digit',month:'short',year:'numeric'}) : ''}
+            </div>
+          </div>
+          <span class="badge ${e.status === 'finished' ? 'bad' : 'ok'}">
+            ${e.status === 'finished' ? 'Finalizado' : 'Abierto'}
+          </span>
+        </button>`).join('')
+    : `<div class="card" style="text-align:center;color:var(--mut)">
+         ${isAdmin ? 'Pulsa “+ Nuevo evento” para empezar.' : 'Todavía no hay eventos.'}
+       </div>`;
+
+  document.querySelectorAll('[data-open]').forEach(b =>
+    b.addEventListener('click', () => openEvent(b.dataset.open)));
+}
+
+/* ==============================================================
+   VISTA: EVENTO
+   ============================================================== */
+function renderEvent(){
+  $('view-list').classList.add('hide');
+  $('view-event').classList.remove('hide');
+
+  const ev = events[currentEventId];
+  if(!ev){ backToList(); return; }
+
+  const isOpen = ev.status !== 'finished';
+  const mine = players[meId];
+
+  $('ev-name').textContent = ev.name || 'Evento';
+  $('ev-status').innerHTML = `<span class="badge ${isOpen ? 'ok' : 'bad'}">
+    ${isOpen ? 'Abierto' : 'Finalizado'}</span>`;
+
+  // Formulario de unirse
+  $('ev-join').classList.toggle('hide', !!mine || !isOpen);
+  $('ev-content').classList.toggle('hide', !mine);
+
+  if(!mine){
+    renderAvatarPicker();
+    return;
   }
 
+  // Mi tarjeta
+  $('meAv').textContent = mine.av || '🍹';
+  $('meNm').textContent = mine.name;
+  $('mePts').textContent = mine.score = scoreOf(mine);
+  const list = sortedPlayers();
+  const rank = list.findIndex(p => p.id === meId) + 1;
+  $('meSt').textContent = `Nº ${rank} de ${list.length} · total ${totalDrinks(mine)} bebidas`;
+
+  // Botones de bebida
+  const btnsHtml = Object.entries(items).map(([id,it]) =>
+    `<button class="dk" data-k="${id}" ${!isOpen ? 'disabled' : ''}>
+       <b>${it.emoji || '🍹'}</b>${esc(it.name)}<br>
+       <small>${it.points ? '+'+it.points : 'bonus'}</small>
+     </button>`).join('');
+  $('btns').innerHTML = btnsHtml || `<div class="sub" style="grid-column:1/-1">
+    ${isAdmin ? 'Añade ítems en el panel de admin ↓' : 'El admin aún no ha añadido bebidas.'}
+  </div>`;
+
+  // Warn / racha
+  $('warn').innerHTML = streak(mine) >= 3 && isOpen
+    ? '<div class="warn">🔥 Racha: 3+ en 20 min. ¡A por la corona! 👑</div>'
+    : '';
+
+  // Podio + ranking
+  renderRanking(list, mine);
+
+  // Panel admin
+  $('admin-panel').classList.toggle('hide', !isAdmin);
+  if(isAdmin){
+    $('items-manage').innerHTML = Object.entries(items).map(([id,it]) => `
+      <div class="row" style="padding:6px 0">
+        <span class="em">${it.emoji || '🍹'}</span>
+        <div class="in"><div class="nm">${esc(it.name)} <span class="bd">+${it.points}</span></div></div>
+        <button class="sm" data-del-item="${id}" style="color:var(--rose)">Borrar</button>
+      </div>`).join('') || `<div class="sub" style="margin:0;text-align:left">Sin ítems</div>`;
+
+    document.querySelectorAll('[data-del-item]').forEach(b =>
+      b.addEventListener('click', () => deleteItem(b.dataset.delItem)));
+
+    $('btn-finish-event').classList.toggle('hide', !isOpen);
+  }
+
+  // listeners bebidas
+  document.querySelectorAll('#btns .dk').forEach(b => {
+    b.addEventListener('click', () => drink(b.dataset.k));
+  });
+}
+
+function renderAvatarPicker(){
+  const box = $('avs');
+  if(box.dataset.ready) return;
+  box.dataset.ready = '1';
+  box.innerHTML = AVS.map(a => `<button class="av${a===avatar?' on':''}" data-av="${a}">${a}</button>`).join('');
+  box.onclick = (e) => {
+    const b = e.target.closest('[data-av]');
+    if(!b) return;
+    avatar = b.dataset.av;
+    try { localStorage.setItem('cc_avatar', avatar); } catch(e){}
+    box.querySelectorAll('.av').forEach(x => x.classList.toggle('on', x === b));
+  };
+}
+
+function renderRanking(list, mine){
+  const max = Math.max(1, ...list.map(p => p.score));
+
+  // Podio
+  const top = [list[1], list[0], list[2]], hs = [95,125,75];
+  $('pod').innerHTML = top.map((p,i) => p
+    ? `<div class="pc">
+         <div class="em">${p.av || '🍹'}</div>
+         <div class="nm">${esc(p.name)}</div>
+         <div class="bar" style="height:${hs[i]*(0.35+0.65*p.score/max)}px">
+           ${['🥈','🥇','🥉'][i]} ${p.score}
+         </div>
+       </div>`
+    : '<div class="pc"></div>').join('');
+
+  // Ranking
   const water = [...list].sort((a,b)=>(b.c?.agua||0)-(a.c?.agua||0))[0];
   const badges = p => {
     let b = '';
     if(p.id === list[0].id && p.score > 0) b += '<span class="bd">👑 líder</span>';
-    if(water && p.id === water.id && (water.c?.agua||0) > 0) b += '<span class="bd">💧 el sensato</span>';
+    if(water && p.id === water.id && (water.c?.agua||0) > 0) b += '<span class="bd">💧 sensato</span>';
     if(streak(p) >= 3) b += '<span class="bd">🔥 racha</span>';
     if(list.length > 2 && p.id === list[list.length-1].id) b += '<span class="bd">🐢 tortuga</span>';
-    if(p.score >= LIMIT) b += '<span class="bd">🏆 leyenda</span>';
     return b;
   };
-
-  const top = [list[1], list[0], list[2]], hs = [95,125,75];
-  $('pod').innerHTML = top.map((p,i)=> p
-    ? `<div class="pc"><div class="em">${p.av}</div><div class="nm">${esc(p.name)}</div>
-       <div class="bar" style="height:${hs[i]*(0.35+0.65*p.score/max)}px">${['🥈','🥇','🥉'][i]} ${p.score}</div></div>`
-    : '<div class="pc"></div>'
-  ).join('');
-
-  $('rows').innerHTML = list.map((p,i)=> `
+  $('rows').innerHTML = list.map((p,i) => `
     <div class="row">
       <div class="rk">${i+1}</div>
-      <div class="em">${p.av}</div>
+      <div class="em">${p.av || '🍹'}</div>
       <div class="in">
         <div class="nm">${esc(p.name)}${p.id===meId?' (tú)':''} ${badges(p)}</div>
         <div class="tr"><i style="width:${p.score/max*100}%"></i></div>
       </div>
       <div class="sc">${p.score}</div>
-    </div>`
-  ).join('');
+    </div>`).join('');
 
+  // Confeti al cambio de líder
   if(list[0].score > 0 && lastLeader && lastLeader !== list[0].id){
-    toast('👑 ¡'+list[0].name+' toma el liderato!');
+    toast('👑 ¡' + list[0].name + ' toma el liderato!');
     confetti(['👑','🥂','🎉']);
   }
   lastLeader = list[0].score > 0 ? list[0].id : lastLeader;
 }
 
-function showFeed(){
-  $('feed').innerHTML = feed.slice(0,6).map(f=>'<div>'+f+'</div>').join('')
-    || '<div>Esperando el primer brindis…</div>';
+function updateFeed(){
+  const f = $('feed');
+  if(!f) return;
+  f.innerHTML = feed.length
+    ? feed.map(x => '<div>' + x + '</div>').join('')
+    : '<div>Esperando el primer brindis…</div>';
 }
 
-/* ---------- flujo ---------- */
-function go(){
-  $('join').classList.add('hide');
-  $('app').classList.remove('hide');
-  render();
-  showFeed();
-}
+/* ==============================================================
+   NAVEGACIÓN
+   ============================================================== */
+async function openEvent(eid){
+  currentEventId = eid;
+  currentView = 'event';
+  items = {};
+  players = {};
+  feed = [];
+  lastLeader = null;
 
-function drink(k){
-  const m = players[meId]; if(!m) return;
-  const d = D.find(x=>x.k === k);
-  if(d.p > 0 && m.score + d.p > LIMIT) return;
+  // Reset UI
+  $('feed').innerHTML = '<div>Cargando…</div>';
+  $('ev-join').classList.add('hide');
+  $('ev-content').classList.add('hide');
 
-  const c = { ...m.c, [k]:(m.c[k]||0)+1 };
-  const h = [ ...(m.h||[]), Date.now() ].slice(-6);
-  lastK = k;
-  save({ ...m, c, h, score: score(c), last:{ k, t: Date.now() } });
+  // Cambiar suscripciones
+  if(subscribedEid && subscribedEid !== eid){
+    client.unsubscribe([ITEMS_TOPIC(subscribedEid), PLAYERS_PREFIX(subscribedEid) + '+']);
+  }
+  subscribedEid = eid;
 
-  if(k === 'agua') confetti(['💧']);
-}
-
-/* ---------- wiring ---------- */
-$('btns').innerHTML = D.map(d =>
-  `<button class="dk" data-k="${d.k}"><b>${d.e}</b>${d.n}<br><small>${d.p?'+'+d.p:'bonus'}</small></button>`
-).join('');
-
-$('btns').onclick = e => {
-  const b = e.target.closest('.dk');
-  if(b && !b.disabled) drink(b.dataset.k);
-};
-
-$('avs').innerHTML = AVS.map(a => `<button class="av${a===av?' on':''}">${a}</button>`).join('');
-$('avs').onclick = e => {
-  const b = e.target.closest('.av'); if(!b) return;
-  av = b.textContent;
-  document.querySelectorAll('.av').forEach(x=>x.classList.toggle('on', x===b));
-};
-
-$('joinBtn').onclick = () => {
-  const n = $('nick').value.trim();
-  if(!n){ $('nick').focus(); return; }
-  const existing = players[meId];
-  save({
-    name: n, av,
-    c: existing?.c || {},
-    score: existing?.score || 0,
-    h: existing?.h || [],
-    last: existing?.last || { k:null, t: Date.now() }
+  await new Promise(resolve => {
+    client.subscribe([
+      { topic: ITEMS_TOPIC(eid), qos: 1 },
+      { topic: PLAYERS_PREFIX(eid) + '+', qos: 1 }
+    ], () => resolve());
   });
-  go();
-};
 
-$('undo').onclick = () => {
-  const m = players[meId];
-  if(!lastK || !m || !m.c || !m.c[lastK]) return;
-  const c = { ...m.c, [lastK]: m.c[lastK]-1 };
-  save({ ...m, c, h:(m.h||[]).slice(-1)[0] ? (m.h||[]).slice(0,-1) : (m.h||[]), score: score(c) });
-  lastK = null;
-};
+  // Esperar a los retained de este evento
+  await new Promise(r => setTimeout(r, 700));
 
-/* ---------- bootstrap ---------- */
-(async () => {
-  $('join').classList.remove('hide');
-
-  // Recuperar mi estado de localStorage por si el broker perdió retained
-  try{
-    const mine = JSON.parse(localStorage.getItem('mp_mine'));
-    if(mine && mine.name) players[meId] = mine;
-  }catch(e){}
-
-  try{
-    await connectMQTT();
-  }catch(e){
-    console.warn(e);
-    localFallback();
+  // Recuperar backup si el broker perdió el retained
+  if(!players[meId]){
+    try {
+      const backup = JSON.parse(localStorage.getItem('cc_player_' + eid));
+      if(backup && backup.name){
+        players[meId] = backup;
+        publishPlayer(eid, meId, backup);
+      }
+    } catch(e){}
   }
 
-  if(players[meId]) go();
-  else { $('join').classList.remove('hide'); $('app').classList.add('hide'); }
+  renderEvent();
+  updateFeed();
+}
+
+function backToList(){
+  if(subscribedEid){
+    client.unsubscribe([ITEMS_TOPIC(subscribedEid), PLAYERS_PREFIX(subscribedEid) + '+']);
+    subscribedEid = null;
+  }
+  currentEventId = null;
+  currentView = 'list';
+  items = {};
+  players = {};
+  feed = [];
+  lastLeader = null;
   render();
+}
+
+/* ==============================================================
+   ACCIONES DE JUGADOR
+   ============================================================== */
+function drink(k){
+  if(!ready || !client?.connected) return toast('Sin conexión');
+  const ev = events[currentEventId];
+  if(!ev || ev.status === 'finished') return;
+  const mine = players[meId];
+  if(!mine) return toast('Únete primero');
+  const it = items[k];
+  if(!it) return;
+
+  const now = Date.now();
+  const c = { ...(mine.c || {}), [k]: ((mine.c?.[k] || 0) + 1) };
+  const h = [ ...(mine.h || []), now ].slice(-6);
+  const data = { ...mine, c, h, last: { k, t: now } };
+
+  players[meId] = data;
+  lastK = k;
+  publishPlayer(currentEventId, meId, data);
+  renderEvent();
+
+  if(it.points === 0) confetti(['💧']);
+  else if(it.points >= 2) confetti([it.emoji || '🥂','🎉']);
+
+  toast(`+${it.points} ${it.emoji || ''} ${it.name}`);
+}
+
+function undo(){
+  if(!ready || !client?.connected) return toast('Sin conexión');
+  const mine = players[meId];
+  if(!lastK || !mine?.c?.[lastK]) return toast('Nada que deshacer');
+
+  const c = { ...mine.c, [lastK]: mine.c[lastK] - 1 };
+  const h = (mine.h || []).slice(0, -1);
+  const data = { ...mine, c, h };
+  players[meId] = data;
+  publishPlayer(currentEventId, meId, data);
+  lastK = null;
+  renderEvent();
+  toast('Deshecho');
+}
+
+function joinEvent(){
+  if(!ready || !client?.connected) return toast('Sin conexión');
+  const name = $('nick').value.trim();
+  if(!name) { $('nick').focus(); return; }
+
+  const existing = players[meId] || {};
+  const data = {
+    name, av: avatar,
+    c: existing.c || {},
+    h: existing.h || [],
+    last: existing.last || { k: null, t: Date.now() }
+  };
+  players[meId] = data;
+  publishPlayer(currentEventId, meId, data);
+  renderEvent();
+  toast(`¡Dentro, ${name}!`);
+}
+
+/* ==============================================================
+   ACCIONES DE ADMIN
+   ============================================================== */
+function tryBecomeAdmin(){
+  const pwd = prompt('Contraseña de admin:');
+  if(pwd === null) return;
+  if(pwd === ADMIN_PASSWORD){
+    isAdmin = true;
+    try { localStorage.setItem('cc_admin', 'yes'); } catch(e){}
+    render();
+    toast('Modo admin activado');
+  } else {
+    toast('Contraseña incorrecta');
+  }
+}
+
+function logoutAdmin(){
+  if(!confirm('¿Salir de modo admin?')) return;
+  isAdmin = false;
+  try { localStorage.removeItem('cc_admin'); } catch(e){}
+  render();
+}
+
+function createEvent(){
+  if(!isAdmin || !ready || !client?.connected) return;
+  const name = prompt('Nombre del evento (ej. Boda de Mónica y Josan):');
+  if(!name || !name.trim()) return;
+
+  const id = 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+  events[id] = {
+    name: name.trim(),
+    status: 'open',
+    createdAt: Date.now()
+  };
+
+  // Publicar el evento Y sus ítems por defecto
+  client.publish(EVENTS_TOPIC, JSON.stringify(events), { qos:1, retain:true });
+  client.publish(ITEMS_TOPIC(id), JSON.stringify(DEFAULT_ITEMS), { qos:1, retain:true });
+
+  toast('Evento creado');
+  render();
+}
+
+function addItem(){
+  if(!isAdmin || !ready || !client?.connected) return toast('Sin conexión');
+  const emoji  = ($('new-item-emoji').value.trim() || '🍹').slice(0, 4);
+  const name   = $('new-item-name').value.trim();
+  const points = Number($('new-item-points').value);
+  if(!name) return toast('Pon un nombre');
+  if(!Number.isFinite(points) || points < 0) return toast('Puntos inválidos');
+
+  const id = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,4);
+  items[id] = { emoji, name, points };
+  publishItems();
+  renderEvent();
+  toast(`${emoji} ${name} añadido (+${points})`);
+
+  $('new-item-name').value = '';
+  $('new-item-points').value = '1';
+  $('new-item-emoji').value = '🍹';
+}
+
+function deleteItem(id){
+  if(!isAdmin) return;
+  const it = items[id];
+  if(!it) return;
+  if(!confirm(`¿Borrar "${it.name}"?`)) return;
+  delete items[id];
+  publishItems();
+  renderEvent();
+}
+
+function finishEvent(){
+  if(!isAdmin) return;
+  const ev = events[currentEventId];
+  if(!ev || ev.status === 'finished') return;
+  if(!confirm('¿Finalizar el evento? Ya no se podrán sumar más puntos.')) return;
+
+  events[currentEventId] = { ...ev, status:'finished', finishedAt: Date.now() };
+  publishEvents();
+  renderEvent();
+  toast('Evento finalizado');
+}
+
+/* ==============================================================
+   LISTENERS UI
+   ============================================================== */
+$('btn-admin-login').addEventListener('click', tryBecomeAdmin);
+$('btn-admin-logout').addEventListener('click', logoutAdmin);
+$('btn-new-event').addEventListener('click', createEvent);
+$('btn-back').addEventListener('click', backToList);
+$('joinBtn').addEventListener('click', joinEvent);
+$('undo').addEventListener('click', undo);
+$('btn-add-item').addEventListener('click', addItem);
+$('btn-finish-event').addEventListener('click', finishEvent);
+
+/* ==============================================================
+   BOOTSTRAP
+   ============================================================== */
+(function init(){
+  try {
+    meId = localStorage.getItem('cc_me_id');
+    if(!meId){
+      meId = 'p' + Math.random().toString(36).slice(2,10);
+      localStorage.setItem('cc_me_id', meId);
+    }
+    const savedAv = localStorage.getItem('cc_avatar');
+    avatar = (savedAv && AVS.includes(savedAv)) ? savedAv
+           : AVS[Math.floor(Math.random()*AVS.length)];
+    isAdmin = localStorage.getItem('cc_admin') === 'yes';
+  } catch(e){}
+
+  renderAvatarPicker();
+  updateOverlay();
+
+  connectMqtt().catch(err => {
+    console.warn('connectMqtt', err);
+    // El cliente MQTT seguirá reintentando; overlay se actualiza solo
+  });
 })();
 </script>
 </body>
