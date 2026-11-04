@@ -16,7 +16,7 @@ const firebaseConfig = {
 };
 
 /* Solo estos correos son admin (login con Google) */
-const ADMIN_EMAILS = ["apm2597@gmail.com"];
+const ADMIN_EMAILS = ["apm2597@gmail.com", "dejuanaguadomanuel@gmail.com"];
 
 /* ---------------- IMPORTS ---------------- */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
